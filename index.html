@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Otong Micheal Favor | Legal Portfolio</title>
-    <link rel="icon" href="Fm_Bg.jpg" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link rel="icon" href="Fm_Bg.jpg" type="image/x-icon">
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         body { font-family: 'Inter', sans-serif; scroll-behavior: smooth; }
         h1, h2, .serif { font-family: 'Playfair Display', serif; }
@@ -35,7 +35,8 @@
     <div id="login-modal" class="fixed inset-0 bg-black/50 hidden flex items-center justify-center z-[100]">
         <div class="bg-white p-8 rounded shadow-lg max-w-sm w-full text-center">
             <h3 class="text-xl mb-4 serif">Authorized Access Only</h3>
-            <input id="admin-password" type="password" placeholder="Enter Admin Password" class="w-full p-2 border mb-4 rounded">
+            <input id="admin-email" type="email" placeholder="Admin email" class="w-full p-2 border mb-4 rounded">
+            <input id="admin-password" type="password" placeholder="Password" class="w-full p-2 border mb-4 rounded">
             <button id="submit-login" class="bg-[#4A0404] text-white w-full py-2 rounded">Enter Dashboard</button>
             <button onclick="closeModal('login-modal')" class="mt-2 text-sm text-slate-400">Cancel</button>
         </div>
@@ -180,19 +181,39 @@
         // 5. ADMIN LOGIC
         document.getElementById('login-btn').addEventListener('click', () => openModal('login-modal'));
 
-        document.getElementById('submit-login').addEventListener('click', () => {
-            const pass = document.getElementById('admin-password').value;
-            if (pass === 'admin') { // Replace 'admin' with your choice
-                isLoggedIn = true;
-                document.getElementById('admin-bar').classList.remove('hidden');
-                closeModal('login-modal');
-                fetchArticles();
-            } else {
-                alert("Incorrect Password");
+        document.getElementById('submit-login').addEventListener('click', async () => {
+            const email = document.getElementById('admin-email').value.trim();
+            const password = document.getElementById('admin-password').value;
+            if (!email || !password) {
+                alert('Please enter email and password');
+                return;
+            }
+
+            try {
+                const { data, error } = await _supabase.auth.signInWithPassword({ email, password });
+                if (error) {
+                    alert('Login failed: ' + error.message);
+                    return;
+                }
+                if (data && data.user) {
+                    isLoggedIn = true;
+                    document.getElementById('admin-bar').classList.remove('hidden');
+                    closeModal('login-modal');
+                    fetchArticles();
+                } else {
+                    alert('Login failed');
+                }
+            } catch (err) {
+                alert('Login error: ' + err.message);
             }
         });
 
-        function logout() {
+        async function logout() {
+            try {
+                await _supabase.auth.signOut();
+            } catch (err) {
+                console.warn('Sign out error', err);
+            }
             isLoggedIn = false;
             document.getElementById('admin-bar').classList.add('hidden');
             fetchArticles();
@@ -203,8 +224,18 @@
         function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
         // RUN ON LOAD
-        fetchArticles();
+        (async function init() {
+            try {
+                const { data: { session } } = await _supabase.auth.getSession();
+                if (session && session.user) {
+                    isLoggedIn = true;
+                    document.getElementById('admin-bar').classList.remove('hidden');
+                }
+            } catch (err) {
+                // ignore
+            }
+            fetchArticles();
+        })();
     </script>
 </body>
 </html>
-
