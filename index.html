@@ -29,7 +29,17 @@
     <div id="admin-bar" class="bg-yellow-100 p-2 text-center hidden flex justify-center gap-4 border-b border-yellow-200">
         <span class="font-bold">ADMIN MODE:</span>
         <button onclick="openModal('add-article-modal')" class="underline text-blue-700">Add New Article</button>
+        <button onclick="openModal('edit-about-modal')" class="underline text-green-700">Edit About</button>
         <button onclick="logout()" class="underline text-red-700">Logout</button>
+    </div>
+
+    <div id="edit-about-modal" class="fixed inset-0 bg-black/50 hidden flex items-center justify-center z-[100]">
+        <div class="bg-white p-8 rounded shadow-lg max-w-lg w-full text-center">
+            <h3 class="text-xl mb-4 serif">Edit "About" Section</h3>
+            <textarea id="about-content" class="w-full p-2 border mb-4" rows="10"></textarea>
+            <button id="save-about-btn" class="bg-[#4A0404] text-white w-full py-2 rounded">Save</button>
+            <button onclick="closeModal('edit-about-modal')" class="mt-2 text-sm text-slate-400">Cancel</button>
+        </div>
     </div>
 
     <div id="login-modal" class="fixed inset-0 bg-black/50 hidden flex items-center justify-center z-[100]">
@@ -50,6 +60,11 @@
             <textarea id="art-summary" placeholder="Short Summary" class="w-full p-2 border mb-4"></textarea>
             <textarea id="art-content" placeholder="Full Article Content" class="w-full p-2 border mb-4" rows="6"></textarea>
             <input id="art-img-url" type="text" placeholder="Image URL (Link to your picture)" class="w-full p-2 border mb-4">
+            <label class="block text-sm text-slate-600 mb-1">Or upload image from your device</label>
+            <input id="art-img-file" type="file" accept="image/*" class="w-full p-2 border mb-4">
+            <label class="block text-sm text-slate-600 mb-1">Attach PDF / Word document (optional)</label>
+            <input id="art-attachment" type="file" accept=".pdf,.doc,.docx" class="w-full p-2 border mb-4">
+            <input id="editing-id" type="hidden" value="">
             <button id="publish-btn" class="bg-[#4A0404] text-white px-6 py-2 rounded w-full">Publish to Website</button>
             <button onclick="closeModal('add-article-modal')" class="w-full mt-2 text-slate-400">Discard</button>
         </div>
@@ -114,6 +129,19 @@
 
         let isLoggedIn = false;
 
+        // Upload file to Supabase storage (bucket: 'articles')
+        async function uploadToStorage(file, folder) {
+            if (!file) return { publicUrl: null, path: null };
+            const safeName = file.name.replace(/\s+/g, '_');
+            const path = `${folder}/${Date.now()}_${safeName}`;
+            try {
+                const { error: uploadError } = await _supabase.storage.from('articles').upload(path, file);
+                if (uploadError) { console.warn('Upload error', uploadError); return { publicUrl: null, path: null }; }
+                const { data: publicData } = _supabase.storage.from('articles').getPublicUrl(path);
+                return { publicUrl: publicData.publicUrl, path };
+            } catch (e) { console.warn('Storage exception', e); return { publicUrl: null, path: null }; }
+        }
+
         // 2. FETCH ARTICLES (READ)
         async function fetchArticles() {
             const grid = document.getElementById('article-grid');
@@ -129,18 +157,25 @@
                 return;
             }
 
+            if (!articles || articles.length === 0) {
+                grid.innerHTML = '<p class="col-span-3 text-center text-slate-400">No articles yet.</p>';
+                return;
+            }
+
             grid.innerHTML = articles.map(post => `
                 <article class="bg-white border border-slate-200 group cursor-pointer hover:shadow-xl transition-all overflow-hidden flex flex-col">
                     <div class="h-48 overflow-hidden bg-slate-200">
-                        <img src="${post.image_url || 'https://via.placeholder.com/400x250'}" class="w-full h-full object-cover group-hover:scale-105 transition duration-500">
+                        <img src="${post.image_url || post.image_public_url || 'https://via.placeholder.com/400x250'}" class="w-full h-full object-cover group-hover:scale-105 transition duration-500">
                     </div>
                     <div class="p-6 flex-grow">
-                        <span class="text-xs font-bold text-[#4A0404] uppercase tracking-tighter">${post.category}</span>
-                        <h3 class="text-xl mt-2 mb-3 font-semibold serif">${post.title}</h3>
-                        <p class="text-slate-600 text-sm mb-4 line-clamp-2">${post.summary}</p>
+                        <span class="text-xs font-bold text-[#4A0404] uppercase tracking-tighter">${post.category || ''}</span>
+                        <h3 class="text-xl mt-2 mb-3 font-semibold serif">${post.title || ''}</h3>
+                        <p class="text-slate-600 text-sm mb-4 line-clamp-2">${post.summary || ''}</p>
+                        ${post.attachment_public_url ? `<a href="${post.attachment_public_url}" target="_blank" class="text-sm text-blue-600 underline">Download Attachment</a>` : ''}
                     </div>
                     ${isLoggedIn ? `
-                        <div class="p-4 bg-slate-50 border-t flex justify-between">
+                        <div class="p-4 bg-slate-50 border-t flex gap-4">
+                            <button onclick="editArticle('${post.id}')" class="text-blue-600 text-xs font-bold uppercase hover:underline">Edit</button>
                             <button onclick="deleteArticle('${post.id}')" class="text-red-600 text-xs font-bold uppercase hover:underline">Delete</button>
                         </div>
                     ` : ''}
@@ -148,76 +183,152 @@
             `).join('');
         }
 
-        // 3. PUBLISH ARTICLE (CREATE)
+        // 3. PUBLISH ARTICLE (CREATE / UPDATE)
         document.getElementById('publish-btn').addEventListener('click', async () => {
-            const newPost = {
-                title: document.getElementById('art-title').value,
-                category: document.getElementById('art-category').value,
-                summary: document.getElementById('art-summary').value,
-                content: document.getElementById('art-content').value,
-                image_url: document.getElementById('art-img-url').value
+            if (!isLoggedIn) { alert('Please log in as admin to publish.'); return; }
+
+            const id = document.getElementById('editing-id').value || null;
+            const title = document.getElementById('art-title').value.trim();
+            const category = document.getElementById('art-category').value.trim();
+            const summary = document.getElementById('art-summary').value.trim();
+            const content = document.getElementById('art-content').value.trim();
+            const image_url_raw = document.getElementById('art-img-url').value.trim();
+            const imgFile = document.getElementById('art-img-file').files[0];
+            const attachmentFile = document.getElementById('art-attachment').files[0];
+
+            if (!title || !category || !summary || !content) { alert('Please fill in all required fields.'); return; }
+
+            // upload files if provided
+            let image_public = image_url_raw || null;
+            let image_path = null;
+            if (imgFile) {
+                const res = await uploadToStorage(imgFile, 'images');
+                if (res.publicUrl) { image_public = res.publicUrl; image_path = res.path; }
+            }
+
+            let attachment_public = null;
+            let attachment_path = null;
+            if (attachmentFile) {
+                const res = await uploadToStorage(attachmentFile, 'attachments');
+                if (res.publicUrl) { attachment_public = res.publicUrl; attachment_path = res.path; }
+            }
+
+            const payload = {
+                title, category, summary, content,
+                image_url: image_public,
+                image_path: image_path,
+                image_public_url: image_public,
+                attachment_public_url: attachment_public,
+                attachment_path: attachment_path,
+                created_at: new Date().toISOString()
             };
 
-            const { error } = await _supabase.from('articles').insert([newPost]);
-
-            if (error) {
-                alert("Upload failed: " + error.message);
+            if (id) {
+                // update
+                const { error } = await _supabase.from('articles').update(payload).eq('id', id);
+                if (error) { alert('Update failed: ' + error.message); return; }
+                alert('Article updated');
             } else {
-                alert("Article Published Live!");
-                closeModal('add-article-modal');
-                fetchArticles();
+                const { error } = await _supabase.from('articles').insert([payload]);
+                if (error) { alert('Publish failed: ' + error.message); return; }
+                alert('Article Published Live!');
             }
+
+            // reset form
+            document.getElementById('art-title').value = '';
+            document.getElementById('art-category').value = '';
+            document.getElementById('art-summary').value = '';
+            document.getElementById('art-content').value = '';
+            document.getElementById('art-img-url').value = '';
+            document.getElementById('art-img-file').value = '';
+            document.getElementById('art-attachment').value = '';
+            document.getElementById('editing-id').value = '';
+            closeModal('add-article-modal');
+            fetchArticles();
         });
 
         // 4. DELETE ARTICLE
         async function deleteArticle(id) {
-            if(confirm("Permanently delete this article?")) {
-                const { error } = await _supabase.from('articles').delete().eq('id', id);
-                if (error) alert(error.message);
-                else fetchArticles();
-            }
+            if (!confirm('Permanently delete this article?')) return;
+            // fetch to get storage paths
+            const { data: article, error: fetchErr } = await _supabase.from('articles').select('*').eq('id', id).single();
+            if (fetchErr) { alert('Delete failed: ' + fetchErr.message); return; }
+
+            // remove files if present
+            try {
+                if (article.image_path) await _supabase.storage.from('articles').remove([article.image_path]);
+                if (article.attachment_path) await _supabase.storage.from('articles').remove([article.attachment_path]);
+            } catch (e) { console.warn('Error removing files', e); }
+
+            const { error } = await _supabase.from('articles').delete().eq('id', id);
+            if (error) alert('Delete failed: ' + error.message);
+            else fetchArticles();
         }
 
-        // 5. ADMIN LOGIC
+        // 5. EDIT ARTICLE
+        async function editArticle(id) {
+            const { data: article, error } = await _supabase.from('articles').select('*').eq('id', id).single();
+            if (error) { alert('Fetch failed: ' + error.message); return; }
+            document.getElementById('art-title').value = article.title || '';
+            document.getElementById('art-category').value = article.category || '';
+            document.getElementById('art-summary').value = article.summary || '';
+            document.getElementById('art-content').value = article.content || '';
+            document.getElementById('art-img-url').value = article.image_public_url || article.image_url || '';
+            document.getElementById('editing-id').value = article.id;
+            openModal('add-article-modal');
+        }
+
+        // 6. ADMIN LOGIC + AUTH
         document.getElementById('login-btn').addEventListener('click', () => openModal('login-modal'));
 
         document.getElementById('submit-login').addEventListener('click', async () => {
             const email = document.getElementById('admin-email').value.trim();
             const password = document.getElementById('admin-password').value;
-            if (!email || !password) {
-                alert('Please enter email and password');
-                return;
-            }
-
+            if (!email || !password) { alert('Please enter email and password'); return; }
             try {
                 const { data, error } = await _supabase.auth.signInWithPassword({ email, password });
-                if (error) {
-                    alert('Login failed: ' + error.message);
-                    return;
-                }
+                if (error) { alert('Login failed: ' + error.message); return; }
                 if (data && data.user) {
                     isLoggedIn = true;
                     document.getElementById('admin-bar').classList.remove('hidden');
+                    document.getElementById('publish-btn').disabled = false;
                     closeModal('login-modal');
                     fetchArticles();
-                } else {
-                    alert('Login failed');
-                }
-            } catch (err) {
-                alert('Login error: ' + err.message);
-            }
+                } else alert('Login failed');
+            } catch (err) { alert('Login error: ' + err.message); }
         });
 
         async function logout() {
-            try {
-                await _supabase.auth.signOut();
-            } catch (err) {
-                console.warn('Sign out error', err);
-            }
+            try { await _supabase.auth.signOut(); } catch (err) { console.warn('Sign out error', err); }
             isLoggedIn = false;
             document.getElementById('admin-bar').classList.add('hidden');
+            document.getElementById('publish-btn').disabled = true;
             fetchArticles();
         }
+
+        // ABOUT editing (stored locally)
+        function loadAbout() {
+            const saved = localStorage.getItem('micheal_about');
+            if (saved) {
+                const container = document.querySelector('#about .text-lg');
+                if (container) container.innerHTML = saved;
+                document.getElementById('about-content').value = saved;
+            } else {
+                // populate textarea with existing content
+                const container = document.querySelector('#about .text-lg');
+                if (container) document.getElementById('about-content').value = container.innerHTML.trim();
+            }
+        }
+
+        document.getElementById('save-about-btn').addEventListener('click', () => {
+            if (!isLoggedIn) { alert('Please log in to edit About.'); return; }
+            const val = document.getElementById('about-content').value.trim();
+            localStorage.setItem('micheal_about', val);
+            const container = document.querySelector('#about .text-lg');
+            if (container) container.innerHTML = val;
+            closeModal('edit-about-modal');
+            alert('About section updated (stored locally).');
+        });
 
         // UTILS
         function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
@@ -225,15 +336,17 @@
 
         // RUN ON LOAD
         (async function init() {
+            // disable publish until authenticated
+            document.getElementById('publish-btn').disabled = true;
             try {
                 const { data: { session } } = await _supabase.auth.getSession();
                 if (session && session.user) {
                     isLoggedIn = true;
                     document.getElementById('admin-bar').classList.remove('hidden');
+                    document.getElementById('publish-btn').disabled = false;
                 }
-            } catch (err) {
-                // ignore
-            }
+            } catch (err) { /* ignore */ }
+            loadAbout();
             fetchArticles();
         })();
     </script>
