@@ -157,17 +157,50 @@
         // Basic UUID regex (simple validation)
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-        // Upload file to Supabase storage (bucket specified)
-        async function uploadToStorage(file, bucketName) {
-            if (!file) return { publicUrl: null, path: null };
-            const safeName = file.name.replace(/\s+/g, '_');
-            const path = `${Date.now()}_${safeName}`;
+        // Bucket names configuration
+        const BUCKETS = {
+            images: 'article-images',
+            pdfs: 'pdf-storage'
+        };
+
+        // Generate safe storage path with article ID and timestamp
+        function generateStoragePath(articleId, filename) {
+            const timestamp = Date.now();
+            const clean = filename.replace(/\\/g, '/').split('/').pop() || filename;
+            return `articles/${articleId}/${timestamp}_${clean}`;
+        }
+
+        // Upload file to Supabase storage (returns bucket, path, publicUrl, error)
+        async function uploadToStorage(file, options) {
+            if (!file) return { bucket: null, path: null, publicUrl: null, error: 'No file provided' };
+            
+            const bucketName = options.bucketName || BUCKETS.pdfs;
+            const filename = options.filename || file.name;
+            const path = generateStoragePath(options.articleId, filename);
+            
             try {
-                const { error: uploadError } = await _supabase.storage.from(bucketName).upload(path, file);
-                if (uploadError) { console.warn('Upload error', uploadError); return { publicUrl: null, path: null, error: uploadError }; }
-                const { data: publicData } = _supabase.storage.from(bucketName).getPublicUrl(path);
-                return { publicUrl: publicData.publicUrl, path };
-            } catch (e) { console.warn('Storage exception', e); return { publicUrl: null, path: null, error: e }; }
+                const { data, error: uploadError } = await _supabase.storage
+                    .from(bucketName)
+                    .upload(path, file, { cacheControl: '3600', upsert: false });
+                
+                if (uploadError) {
+                    console.warn('Upload error', uploadError);
+                    return { bucket: bucketName, path: null, publicUrl: null, error: uploadError.message };
+                }
+                
+                const { data: publicData, error: publicError } = _supabase.storage
+                    .from(bucketName)
+                    .getPublicUrl(path);
+                
+                if (publicError) {
+                    return { bucket: bucketName, path, publicUrl: null, error: publicError.message };
+                }
+                
+                return { bucket: bucketName, path, publicUrl: publicData.publicUrl, error: null };
+            } catch (e) {
+                console.warn('Storage exception', e);
+                return { bucket: bucketName, path: null, publicUrl: null, error: e.message };
+            }
         }
 
         // Extract object path from Supabase public URL for a given bucket
@@ -242,7 +275,6 @@
         document.getElementById('publish-btn').addEventListener('click', async () => {
             if (!isLoggedIn) { alert('Please log in as admin to publish.'); return; }
 
-            const id = document.getElementById('editing-id').value || null;
             const title = document.getElementById('art-title').value.trim();
             const category = document.getElementById('art-category').value.trim();
             const summary = document.getElementById('art-summary').value.trim();
@@ -250,6 +282,7 @@
             const image_url_raw = document.getElementById('art-img-url').value.trim();
             const imgFile = document.getElementById('art-img-file').files[0];
             const attachmentFile = document.getElementById('art-attachment').files[0];
+            const id = document.getElementById('editing-id').value || null;
 
             // Content is optional if attachment is provided
             if (!title || !category || !summary || (!content && !attachmentFile)) {
@@ -257,21 +290,46 @@
                 return;
             }
 
-            // upload image file if provided (prefer file over URL)
+            // Use article ID or generate a temporary one for new articles
+            const articleId = id || `temp_${Date.now()}`;
+
+            // Upload image file if provided (prefer file over URL)
             let image_url_final = image_url_raw || null;
             if (imgFile) {
-                const res = await uploadToStorage(imgFile, 'article-images');
+                const res = await uploadToStorage(imgFile, { 
+                    articleId, 
+                    filename: imgFile.name, 
+                    bucketName: BUCKETS.images 
+                });
+                if (res.error) {
+                    alert('Image upload failed: ' + res.error);
+                    return;
+                }
                 if (res.publicUrl) { image_url_final = res.publicUrl; }
             }
 
-            // upload attachment if provided
+            // Upload attachment if provided
             let attachment_url = null;
+            let attachment_path = null;
+            let attachment_bucket = null;
             if (attachmentFile) {
-                const res = await uploadToStorage(attachmentFile, 'pdf storage');
-                if (res.publicUrl) { attachment_url = res.publicUrl; }
+                const res = await uploadToStorage(attachmentFile, { 
+                    articleId, 
+                    filename: attachmentFile.name, 
+                    bucketName: BUCKETS.pdfs 
+                });
+                if (res.error) {
+                    alert('Attachment upload failed: ' + res.error);
+                    return;
+                }
+                if (res.publicUrl) { 
+                    attachment_url = res.publicUrl;
+                    attachment_path = res.path;
+                    attachment_bucket = res.bucket;
+                }
             }
 
-            // Build payload with only necessary fields
+            // Build payload
             const payload = {
                 title,
                 category,
@@ -279,21 +337,24 @@
                 content: content || null,
                 image_url: image_url_final,
                 attachment_public_url: attachment_url,
+                attachment_path: attachment_path,
+                attachment_bucket: attachment_bucket,
                 created_at: new Date().toISOString()
             };
 
             if (id) {
-                // update
+                // Update existing article
                 const { error } = await _supabase.from('articles').update(payload).eq('id', id);
                 if (error) { alert('Update failed: ' + error.message); return; }
                 alert('Article updated');
             } else {
+                // Create new article
                 const { error } = await _supabase.from('articles').insert([payload]);
                 if (error) { alert('Publish failed: ' + error.message); return; }
                 alert('Article Published Live!');
             }
 
-            // reset form
+            // Reset form
             document.getElementById('art-title').value = '';
             document.getElementById('art-category').value = '';
             document.getElementById('art-summary').value = '';
@@ -329,18 +390,23 @@
                 return;
             }
 
-            // fetch to get attachment path if needed for cleanup
+            // Fetch article to get attachment metadata for cleanup
             const { data: article, error: fetchErr } = await _supabase.from('articles').select('*').eq('id', id).single();
             if (fetchErr) { console.warn('Fetch warning (delete can proceed):', fetchErr); }
             else {
                 try {
+                    // Delete image if exists
                     if (article.image_url) {
-                        const imgPath = extractPathFromPublicUrl(article.image_url, 'article-images');
-                        if (imgPath) await _supabase.storage.from('article-images').remove([imgPath]);
+                        const imgPath = extractPathFromPublicUrl(article.image_url, BUCKETS.images);
+                        if (imgPath) await _supabase.storage.from(BUCKETS.images).remove([imgPath]);
                     }
-                    if (article.attachment_public_url) {
-                        const attPath = extractPathFromPublicUrl(article.attachment_public_url, 'pdf storage');
-                        if (attPath) await _supabase.storage.from('pdf storage').remove([attPath]);
+                    // Delete attachment using stored path and bucket
+                    if (article.attachment_path && article.attachment_bucket) {
+                        await _supabase.storage.from(article.attachment_bucket).remove([article.attachment_path]);
+                    } else if (article.attachment_public_url) {
+                        // Fallback: extract path from public URL
+                        const attPath = extractPathFromPublicUrl(article.attachment_public_url, BUCKETS.pdfs);
+                        if (attPath) await _supabase.storage.from(BUCKETS.pdfs).remove([attPath]);
                     }
                 } catch (e) { console.warn('Error removing storage files', e); }
             }
@@ -351,11 +417,8 @@
                 alert('Delete failed: ' + error.message);
                 console.error('Supabase delete error:', error);
             } else {
-                // Find and remove the article element from DOM for immediate feedback
                 const articleEl = document.querySelector(`[data-article-id="${id}"]`);
                 if (articleEl) articleEl.remove();
-                // Optionally re-fetch to ensure list is consistent
-                // await fetchArticles();
             }
         }
 
@@ -526,5 +589,3 @@
     </script>
 </body>
 </html>
-
-
