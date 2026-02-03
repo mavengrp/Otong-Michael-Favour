@@ -80,17 +80,41 @@
     </div>
 
     <div id="article-detail-modal" class="fixed inset-0 bg-black/50 hidden flex items-center justify-center z-[100] overflow-y-auto p-4">
-        <div class="bg-white p-6 md:p-8 rounded shadow-lg max-w-2xl w-full my-6 md:my-10">
-            <button onclick="closeModal('article-detail-modal')" class="float-right text-2xl text-slate-400">&times;</button>
-            <h2 id="detail-title" class="text-2xl md:text-3xl mb-2 serif text-[#4A0404]"></h2>
-            <span id="detail-category" class="text-xs font-bold text-[#4A0404] uppercase tracking-tighter"></span>
-            <div id="detail-image-container" class="my-4 md:my-6">
-                <img id="detail-image" src="" alt="" class="w-full h-48 md:h-96 object-cover rounded">
+        <div class="bg-white rounded-lg shadow-2xl max-w-4xl w-full my-8 md:my-12">
+            <!-- Close Button -->
+            <div class="sticky top-0 bg-white border-b border-slate-200 p-4 md:p-6 flex justify-between items-center">
+                <div></div>
+                <button onclick="closeModal('article-detail-modal')" class="text-3xl text-slate-400 hover:text-slate-600 transition">&times;</button>
             </div>
-            <p id="detail-summary" class="text-base md:text-lg font-semibold mb-3 md:mb-4"></p>
-            <div id="detail-content" class="text-sm md:text-base text-slate-700 leading-relaxed mb-4 md:mb-6"></div>
-            <div id="detail-attachment-container" class="hidden">
-                <a id="detail-attachment" href="" target="_blank" class="inline-block bg-[#4A0404] text-white px-4 md:px-6 py-2 md:py-3 rounded hover:bg-[#3A0303] transition text-sm md:text-base">Download Attachment</a>
+            
+            <!-- Article Content -->
+            <div class="p-6 md:p-10">
+                <!-- Category Badge -->
+                <span id="detail-category" class="inline-block text-xs font-bold text-white bg-[#4A0404] uppercase tracking-widest px-4 py-2 rounded mb-4"></span>
+                
+                <!-- Title -->
+                <h1 id="detail-title" class="text-3xl md:text-5xl mb-6 serif text-[#4A0404] leading-tight"></h1>
+                
+                <!-- Featured Image -->
+                <div id="detail-image-container" class="mb-8 md:mb-10">
+                    <img id="detail-image" src="" alt="" class="w-full h-96 md:h-[500px] object-cover rounded-lg shadow-md">
+                </div>
+                
+                <!-- Summary -->
+                <p id="detail-summary" class="text-lg md:text-xl font-semibold text-slate-800 mb-8 md:mb-10 pb-6 border-b-2 border-slate-200 leading-relaxed"></p>
+                
+                <!-- Main Content with Better Formatting -->
+                <div id="detail-content" class="prose prose-sm md:prose-base max-w-none text-slate-700 leading-8 md:leading-9 space-y-6 md:space-y-8 article-body">
+                </div>
+                
+                <!-- Attachment Download -->
+                <div id="detail-attachment-container" class="hidden mt-10 md:mt-12 pt-8 md:pt-10 border-t border-slate-200">
+                    <p class="text-sm text-slate-600 mb-4 uppercase tracking-widest font-semibold">Related Document:</p>
+                    <a id="detail-attachment" href="" target="_blank" class="inline-flex items-center gap-2 bg-[#4A0404] text-white px-6 md:px-8 py-3 md:py-4 rounded-lg hover:bg-[#3A0303] transition font-semibold text-sm md:text-base">
+                        <span>📥</span>
+                        <span>Download Attachment</span>
+                    </a>
+                </div>
             </div>
         </div>
     </div>
@@ -227,54 +251,73 @@
             if (!grid) return;
             grid.innerHTML = '<p class="col-span-3 text-center text-slate-400">Loading articles...</p>';
 
-            const { data: articles, error } = await _supabase
-                .from('articles')
-                .select('*')
-                .order('created_at', { ascending: false });
+            try {
+                const response = await _supabase
+                    .from('articles')
+                    .select('*')
+                    .order('created_at', { ascending: false });
 
-            if (error) {
-                grid.innerHTML = `<p class="text-red-500">Error: ${error.message}</p>`;
-                console.error('fetchArticles error:', error);
-                return;
-            }
+                const articles = response.data;
+                const error = response.error;
 
-            console.debug('fetchArticles -> articles:', articles);
+                if (error) {
+                    grid.innerHTML = `<p class="text-red-500">Error: ${error.message}</p><p class="text-sm text-slate-400 mt-2">Try refreshing or check your network.</p>`;
+                    console.error('fetchArticles error:', error);
+                    return;
+                }
 
-            if (!articles || articles.length === 0) {
-                grid.innerHTML = '<p class="col-span-3 text-center text-slate-400">No articles found.</p>';
-                return;
-            }
+                console.debug('fetchArticles -> articles:', articles);
 
-            // Build markup with data-id attributes for delete
-            grid.innerHTML = (articles || []).map(post => {
-                // Use a safe fallback id (null will render as empty string)
-                const id = post.id || '';
-                return `
-                    <article class="article-card bg-white border border-slate-200 group cursor-pointer hover:shadow-xl transition-all overflow-hidden flex flex-col" data-article-id="${id}" onclick="openArticleDetail('${id}')">
-                        <div class="h-48 overflow-hidden bg-slate-200">
-                            <img src="${post.image_url || 'https://via.placeholder.com/400x250'}" class="w-full h-full object-cover group-hover:scale-105 transition duration-500" alt="">
-                        </div>
-                        <div class="p-6 flex-grow">
-                            <span class="text-xs font-bold text-[#4A0404] uppercase tracking-tighter">${post.category || ''}</span>
-                            <h3 class="text-xl mt-2 mb-3 font-semibold serif">${post.title || ''}</h3>
-                            <p class="text-slate-600 text-sm mb-4 line-clamp-2">${post.summary || ''}</p>
-                            ${post.attachment_public_url ? `<a href="${post.attachment_public_url}" target="_blank" class="text-sm text-blue-600 underline" onclick="event.stopPropagation();">Download Attachment</a>` : ''}
-                        </div>
-                        ${isLoggedIn ? `
-                            <div class="p-4 bg-slate-50 border-t flex gap-4">
-                                <button class="edit-article-btn text-blue-600 text-xs font-bold uppercase hover:underline" type="button" onclick="event.stopPropagation();">Edit</button>
-                                <button class="delete-article-btn text-red-600 text-xs font-bold uppercase hover:underline" type="button" onclick="event.stopPropagation();">Delete</button>
+                if (!articles || articles.length === 0) {
+                    grid.innerHTML = '<p class="col-span-3 text-center text-slate-400">No articles found.</p>';
+                    return;
+                }
+
+                // Build markup with data-id attributes for delete
+                grid.innerHTML = (articles || []).map(post => {
+                    // Use a safe fallback id (null will render as empty string)
+                    const id = post.id || '';
+                    return `
+                        <article class="article-card bg-white border border-slate-200 group cursor-pointer hover:shadow-xl transition-all overflow-hidden flex flex-col" data-article-id="${id}" onclick="openArticleDetail('${id}')">
+                            <div class="h-48 overflow-hidden bg-slate-200">
+                                <img src="${post.image_url || 'https://via.placeholder.com/400x250'}" class="w-full h-full object-cover group-hover:scale-105 transition duration-500" alt="">
                             </div>
-                        ` : ''}
-                    </article>
+                            <div class="p-6 flex-grow">
+                                <span class="text-xs font-bold text-[#4A0404] uppercase tracking-tighter">${post.category || ''}</span>
+                                <h3 class="text-xl mt-2 mb-3 font-semibold serif">${post.title || ''}</h3>
+                                <p class="text-slate-600 text-sm mb-4 line-clamp-2">${post.summary || ''}</p>
+                                ${post.attachment_public_url ? `<a href="${post.attachment_public_url}" target="_blank" class="text-sm text-blue-600 underline" onclick="event.stopPropagation();">Download Attachment</a>` : ''}
+                            </div>
+                            ${isLoggedIn ? `
+                                <div class="p-4 bg-slate-50 border-t flex gap-4">
+                                    <button class="edit-article-btn text-blue-600 text-xs font-bold uppercase hover:underline" type="button" onclick="event.stopPropagation();">Edit</button>
+                                    <button class="delete-article-btn text-red-600 text-xs font-bold uppercase hover:underline" type="button" onclick="event.stopPropagation();">Delete</button>
+                                </div>
+                            ` : ''}
+                        </article>
+                    `;
+                }).join('');
+            } catch (e) {
+                console.error('fetchArticles exception:', e);
+                grid.innerHTML = `
+                    <div class="col-span-3 text-center text-red-500">Network error: Failed to fetch articles.</div>
+                    <div class="col-span-3 text-center mt-3">
+                        <button id="retry-articles" class="bg-[#4A0404] text-white px-4 py-2 rounded">Retry</button>
+                    </div>
                 `;
-            }).join('');
+                // Attach retry handler
+                setTimeout(() => {
+                    const retryBtn = document.getElementById('retry-articles');
+                    if (retryBtn) retryBtn.addEventListener('click', fetchArticles);
+                }, 50);
+            }
         }
 
         // 3. PUBLISH ARTICLE (CREATE / UPDATE)
         document.getElementById('publish-btn').addEventListener('click', async () => {
             if (!isLoggedIn) { alert('Please log in as admin to publish.'); return; }
 
+            const publishBtn = document.getElementById('publish-btn');
             const title = document.getElementById('art-title').value.trim();
             const category = document.getElementById('art-category').value.trim();
             const summary = document.getElementById('art-summary').value.trim();
@@ -282,89 +325,82 @@
             const image_url_raw = document.getElementById('art-img-url').value.trim();
             const imgFile = document.getElementById('art-img-file').files[0];
             const attachmentFile = document.getElementById('art-attachment').files[0];
-            const id = document.getElementById('editing-id').value || null;
+            const editingId = document.getElementById('editing-id').value || null;
 
-            // Content is optional if attachment is provided
-            if (!title || !category || !summary || (!content && !attachmentFile)) {
-                alert('Please fill in all required fields, or provide a document.');
+            if (!title || !category || !summary) {
+                alert('Please fill in required fields.');
                 return;
             }
 
-            // Use article ID or generate a temporary one for new articles
-            const articleId = id || `temp_${Date.now()}`;
+            try {
+                publishBtn.innerText = "Processing...";
+                publishBtn.disabled = true;
 
-            // Upload image file if provided (prefer file over URL)
-            let image_url_final = image_url_raw || null;
-            if (imgFile) {
-                const res = await uploadToStorage(imgFile, { 
-                    articleId, 
-                    filename: imgFile.name, 
-                    bucketName: BUCKETS.images 
-                });
-                if (res.error) {
-                    alert('Image upload failed: ' + res.error);
-                    return;
-                }
-                if (res.publicUrl) { image_url_final = res.publicUrl; }
-            }
+                let finalArticleId = editingId;
 
-            // Upload attachment if provided
-            let attachment_url = null;
-            let attachment_path = null;
-            let attachment_bucket = null;
-            if (attachmentFile) {
-                const res = await uploadToStorage(attachmentFile, { 
-                    articleId, 
-                    filename: attachmentFile.name, 
-                    bucketName: BUCKETS.pdfs 
-                });
-                if (res.error) {
-                    alert('Attachment upload failed: ' + res.error);
-                    return;
+                // STEP 1: If it's a NEW article, create the row first to get a real UUID
+                if (!editingId) {
+                    const { data, error } = await _supabase
+                        .from('articles')
+                        .insert([{ title: "Drafting...", created_at: new Date().toISOString() }])
+                        .select()
+                        .single();
+                    if (error) throw error;
+                    finalArticleId = data.id;
                 }
-                if (res.publicUrl) { 
+
+                // STEP 2: Handle Image Upload
+                let image_url_final = image_url_raw || null;
+                if (imgFile) {
+                    const res = await uploadToStorage(imgFile, { 
+                        articleId: finalArticleId, 
+                        bucketName: BUCKETS.images 
+                    });
+                    if (res.error) throw new Error("Image Upload: " + res.error);
+                    image_url_final = res.publicUrl;
+                }
+
+                // STEP 3: Handle Attachment Upload
+                let attachment_url = null, attachment_path = null, attachment_bucket = null;
+                if (attachmentFile) {
+                    const res = await uploadToStorage(attachmentFile, { 
+                        articleId: finalArticleId, 
+                        bucketName: BUCKETS.pdfs 
+                    });
+                    if (res.error) throw new Error("Attachment Upload: " + res.error);
                     attachment_url = res.publicUrl;
                     attachment_path = res.path;
                     attachment_bucket = res.bucket;
                 }
+
+                // STEP 4: Update the row with all final data
+                const payload = {
+                    title,
+                    category,
+                    summary,
+                    content: content || null,
+                    image_url: image_url_final,
+                    attachment_public_url: attachment_url,
+                    attachment_path: attachment_path,
+                    attachment_bucket: attachment_bucket
+                };
+
+                const { error: updateError } = await _supabase
+                    .from('articles')
+                    .update(payload)
+                    .eq('id', finalArticleId);
+
+                if (updateError) throw updateError;
+
+                alert('Article Published Successfully!');
+                location.reload(); // Refresh to show changes
+
+            } catch (err) {
+                console.error('System Error:', err);
+                alert('Error: ' + err.message);
+                publishBtn.innerText = "Publish to Website";
+                publishBtn.disabled = false;
             }
-
-            // Build payload
-            const payload = {
-                title,
-                category,
-                summary,
-                content: content || null,
-                image_url: image_url_final,
-                attachment_public_url: attachment_url,
-                attachment_path: attachment_path,
-                attachment_bucket: attachment_bucket,
-                created_at: new Date().toISOString()
-            };
-
-            if (id) {
-                // Update existing article
-                const { error } = await _supabase.from('articles').update(payload).eq('id', id);
-                if (error) { alert('Update failed: ' + error.message); return; }
-                alert('Article updated');
-            } else {
-                // Create new article
-                const { error } = await _supabase.from('articles').insert([payload]);
-                if (error) { alert('Publish failed: ' + error.message); return; }
-                alert('Article Published Live!');
-            }
-
-            // Reset form
-            document.getElementById('art-title').value = '';
-            document.getElementById('art-category').value = '';
-            document.getElementById('art-summary').value = '';
-            document.getElementById('art-content').value = '';
-            document.getElementById('art-img-url').value = '';
-            document.getElementById('art-img-file').value = '';
-            document.getElementById('art-attachment').value = '';
-            document.getElementById('editing-id').value = '';
-            closeModal('add-article-modal');
-            fetchArticles();
         });
 
         // 4. DELETE ARTICLE (with UUID validation)
